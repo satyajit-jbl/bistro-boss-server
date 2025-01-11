@@ -243,6 +243,94 @@ async function run() {
       res.send({paymentResult, deleteResult});
     })
 
+    //stats or analytics
+    app.get('/admin-stats', verifyToken, verifyAdmin, async(req, res)=>{
+      const users = await userCollection.estimatedDocumentCount();
+      const menuItems = await menuCollection.estimatedDocumentCount();
+      const orders = await paymentCollection.estimatedDocumentCount();
+
+      //this is not the best way
+      // const payments = await paymentCollection.find().toArray();
+      // const revenue = payments.reduce((total, payment)=>total+payment.price, 0);
+      /**
+       * Explanation:
+$group: This stage groups the documents in the collection. _id: null means that all documents are grouped into a single group.
+$sum: "$price": This calculates the sum of the price field across all documents
+This approach leverages the database's capabilities to perform the summation, which is typically more efficient than fetching all the documents and calculating the sum in the application.
+       */
+
+      // const revenueResult = await paymentCollection.aggregate([
+      //   { $group: { _id: null, totalRevenue: { $sum: "$price" } } }
+      // ]).toArray();
+      // const revenue = revenueResult.length > 0 ? revenueResult[0].totalRevenue : 0;
+
+      const result = await paymentCollection.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalRevenue: {
+              $sum: '$price'
+            }
+          }
+        }
+      ]).toArray();
+      const revenue = result.length > 0 ? result[0].totalRevenue : 0;
+      
+      res.send({
+        users,
+        menuItems,
+        orders,
+        revenue
+      })
+    })
+
+    //Order status
+    /**
+     * ------------------------------
+     * NON-Efficient wayh
+     * ------------------------------
+     * 1. load all the payments
+     * 2. for every menuItemsIds (which si an array), go find the item from menu collection
+     * 3. for every item in the menu collection that you found from a payment entry(document)
+     */
+
+    // using aggregate pipeline
+    app.get('/order-stats', verifyToken, verifyAdmin, async(req, res)=>{
+      const result = await paymentCollection.aggregate([
+        {
+          $unwind: '$menuItemIds'
+        },
+        {
+          $lookup:{
+            from: 'menu',
+            localField: 'menuItemIds',
+            foreignField: '_id',
+            as: 'menuItems'
+          }
+        },
+        {
+          $unwind: '$menuItems'
+        },
+        {
+          $group:{
+            _id: '$menuItems.category',
+            quantity: { $sum: 1 },
+            revenue: {$sum: '$menuItems.price'}
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            category: '$_id',
+            quantity: '$quantity',
+            revenue: '$revenue'
+          }
+        }
+
+      ]).toArray();
+      res.send(result)
+    })
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
